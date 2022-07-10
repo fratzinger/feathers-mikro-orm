@@ -1,291 +1,377 @@
-import { Application, Paginated } from '@feathersjs/feathers';
+import feathers, { Application, Paginated } from '@feathersjs/feathers';
 import { setupApp } from './app';
 import createService, { Service } from '../src';
-import { NotFound } from '@feathersjs/errors';
+import errors, { NotFound } from '@feathersjs/errors';
 import { Book } from './entities/Book';
+import adapterTests from '@feathersjs/adapter-tests';
+import assert from 'assert';
 
-jest.setTimeout(10000);
+const testSuite = adapterTests([
+  '.options',
+  '.events',
+  '._get',
+  '._find',
+  '._create',
+  '._update',
+  '._patch',
+  '._remove',
+  '.get',
+  '.get + $select',
+  '.get + id + query',
+  '.get + NotFound',
+  '.find',
+  '.remove',
+  '.remove + $select',
+  '.remove + id + query',
+  '.remove + multi',
+  '.update',
+  '.update + $select',
+  '.update + id + query',
+  '.update + NotFound',
+  '.update + query + NotFound',
+  '.patch',
+  '.patch + $select',
+  '.patch + id + query',
+  '.patch multiple',
+  '.patch multi query same',
+  '.patch multi query changed',
+  '.patch + query + NotFound',
+  '.patch + NotFound',
+  '.create',
+  '.create + $select',
+  '.create multi',
+  'internal .find',
+  'internal .get',
+  'internal .create',
+  'internal .update',
+  'internal .patch',
+  'internal .remove',
+  '.find + equal',
+  '.find + equal multiple',
+  '.find + $sort',
+  '.find + $sort + string',
+  '.find + $limit',
+  '.find + $limit 0',
+  '.find + $skip',
+  '.find + $select',
+  '.find + $or',
+  '.find + $in',
+  '.find + $nin',
+  '.find + $lt',
+  '.find + $lte',
+  '.find + $gt',
+  '.find + $gte',
+  '.find + $ne',
+  '.find + $gt + $lt + $sort',
+  '.find + $or nested + $sort',
+  '.find + paginate',
+  '.find + paginate + $limit + $skip',
+  '.find + paginate + $limit 0',
+  '.find + paginate + params',
+  '.remove + id + query id',
+  '.update + id + query id',
+  '.patch + id + query id',
+  '.get + id + query id'
+]);
 
 describe('feathers-mikro-orm', () => {
-  let app: Application;
+  let app: Application = feathers();
 
-  beforeAll(async () => {
-    app = await setupApp();
-  });
-
-  it('defines a service', () => {
-    expect(app.service('book')).toBeDefined();
-  });
-
-  describe('the book service', () => {
-    let service: Service;
-
-    beforeAll(() => {
-      service = app.service('book');
+  describe('commons', () => {
+    before(async () => {
+      app = await setupApp(app);
     });
 
     afterEach(async () => {
       const orm = app.get('orm');
       const connection = orm.em.getConnection();
-      await connection.execute('DELETE FROM book;');
+      await connection.execute('DELETE FROM common;');
     });
 
-    describe('create', () => {
-      it('creates a book', async () => {
-        const options = { title: 'test' };
-        const book = await service.create(options);
-        expect(book).toBeDefined();
-        expect(book.uuid).toBeDefined();
-        expect(book.title).toEqual(options.title);
-      });
+    testSuite(app, errors, 'adapter-test', 'id');
+  });
 
-      it('saves the created book', async () => {
-        const options = { title: 'test' };
-        const book = await service.create(options);
-        const savedBook = await service.get(book.uuid);
-        expect(savedBook).toEqual(book);
-      });
+  describe('mikro orm', () => {
+    beforeEach(async () => {
+      app = await setupApp();
     });
 
-    describe('get', () => {
-      it('gets a saved book by id', async () => {
-        const options = { title: 'test' };
-        const initial = await service.create(options);
-        const saved = await service.get(initial.uuid);
-        expect(saved).toEqual(initial);
-      });
+    it('defines a service', () => {
+      assert.ok(app.service('books'));
     });
 
-    describe('find', () => {
-      it('returns all entities if there are no params', async () => {
-        const options = { title: 'test' };
-        const options2 = { title: 'another' };
-        const book1 = await service.create(options);
-        const book2 = await service.create(options2);
-        const saved = await service.find() as Book[];
+    describe('the book service', () => {
+      let service: Service;
 
-        expect(saved.length).toEqual(2);
-        expect(saved).toContainEqual(book1);
-        expect(saved).toContainEqual(book2);
+      beforeEach(() => {
+        service = app.service('books');
       });
 
-      it('finds by query params', async () => {
-        const options = { title: 'test' };
-        const options2 = { title: 'another' };
-        const book1 = await service.create(options);
-        const book2 = await service.create(options2);
-        const saved = await service.find({ query: { title: 'test' } }) as Book[];
-
-        expect(saved.length).toEqual(1);
-        expect(saved).toContainEqual(book1);
-        expect(saved).not.toContainEqual(book2);
+      afterEach(async () => {
+        const orm = app.get('orm');
+        const connection = orm.em.getConnection();
+        await connection.execute('DELETE FROM book;');
       });
 
-      it('honors feathers options passed as query params', async () => {
-        const options = { title: 'test' };
-        const options2 = { title: 'another' };
-        const book1 = await service.create(options);
-        const book2 = await service.create(options2);
-        // sort/order results using feathers $sort query param
-        const saved = await service.find({ query: { $sort: { title: 1 } } }) as Book[];
-        console.log('saved', saved);
-
-        expect(saved.length).toEqual(2);
-        expect(saved[0]).toEqual(book2);
-        expect(saved[1]).toEqual(book1);
-      });
-
-      it('honors mikro-orm options passed as params.options', async () => {
-        const options = { title: 'test' };
-        const options2 = { title: 'another' };
-        const book1 = await service.create(options);
-        const book2 = await service.create(options2);
-        // sort/order results using mikro-orm orderBy option in params
-        const saved = await service.find({ options: { orderBy: { title: 'ASC' } } }) as Book[];
-        console.log('saved', saved);
-
-        expect(saved.length).toEqual(2);
-        expect(saved[0]).toEqual(book2);
-        expect(saved[1]).toEqual(book1);
-      });
-
-      describe('pagination', () => {
-        it('returns a Paginated object if $limit query param is set', async () => {
+      describe('create', () => {
+        it('creates a book', async () => {
           const options = { title: 'test' };
-          const options2 = { title: 'test' };
-          const options3 = { title: 'test' };
+          const book = await service.create(options);
+          assert.ok(book);
+          assert.ok(book.uuid);
+          assert.deepEqual(book.title, options.title);
+        });
+
+        it('saves the created book', async () => {
+          const options = { title: 'test' };
+          const book = await service.create(options);
+          const savedBook = await service.get(book.uuid);
+          assert.deepStrictEqual(savedBook, book);
+        });
+      });
+
+      describe('get', () => {
+        it('gets a saved book by id', async () => {
+          const options = { title: 'test' };
+          const initial = await service.create(options);
+          const saved = await service.get(initial.uuid);
+          assert.deepStrictEqual(saved, initial);
+        });
+      });
+
+      describe('find', () => {
+        it('returns all entities if there are no params', async () => {
+          const options = { title: 'test' };
+          const options2 = { title: 'another' };
           const book1 = await service.create(options);
           const book2 = await service.create(options2);
-          await service.create(options3);
-          const result = await service.find({ query: { title: 'test', $limit: 2 } }) as Paginated<Book>;
+          const saved = await service.find() as Book[];
 
-          expect(result.total).toEqual(3);
-          expect(result.limit).toEqual(2);
-          expect(result.skip).toEqual(0);
-          expect(result.data.length).toEqual(2);
-          expect(result.data).toContainEqual(book1);
-          expect(result.data).toContainEqual(book2);
+          assert.strictEqual(saved.length, 2);
+          assert.deepStrictEqual(saved.sort(), [book1, book2].sort());
         });
 
-        it('offsets results by $skip query param', async () => {
+        it('finds by query params', async () => {
           const options = { title: 'test' };
-          const options2 = { title: 'test' };
-          const options3 = { title: 'test' };
+          const options2 = { title: 'another' };
           const book1 = await service.create(options);
           const book2 = await service.create(options2);
-          const book3 = await service.create(options3);
-          const result = await service.find({ query: { title: 'test', $limit: 2, $skip: 1 } }) as Paginated<Book>;
+          const saved = await service.find({ query: { title: 'test' } }) as Book[];
 
-          expect(result.total).toEqual(3);
-          expect(result.limit).toEqual(2);
-          expect(result.skip).toEqual(1);
-          expect(result.data.length).toEqual(2);
-          expect(result.data).toContainEqual(book2);
-          expect(result.data).toContainEqual(book3);
-          expect(result.data).not.toContainEqual(book1);
+          assert.strictEqual(saved.length, 1);
+
+          assert.deepStrictEqual(saved[0], book1);
         });
 
-        it('uses default limit set at service initialization if no $limit query param is set', async () => {
+        it('honors feathers options passed as query params', async () => {
           const options = { title: 'test' };
-          const options2 = { title: 'test' };
-          const options3 = { title: 'test' };
+          const options2 = { title: 'another' };
+          const book1 = await service.create(options);
+          const book2 = await service.create(options2);
+          // sort/order results using feathers $sort query param
+          const saved = await service.find({ query: { $sort: { title: 1 } } }) as Book[];
 
-          const paginatedService = createService({
-            orm: app.get('orm'),
-            Entity: Book,
-            paginate: { default: 1 }
+          assert.strictEqual(saved.length, 2);
+          assert.deepStrictEqual(saved[0], book2);
+          assert.deepStrictEqual(saved[1], book1);
+        });
+
+        it('honors mikro-orm options passed as params.options', async () => {
+          const options = { title: 'test' };
+          const options2 = { title: 'another' };
+          const book1 = await service.create(options);
+          const book2 = await service.create(options2);
+          // sort/order results using mikro-orm orderBy option in params
+          const saved = await service.find({ options: { orderBy: { title: 'ASC' } } }) as Book[];
+
+          assert.strictEqual(saved.length, 2);
+          assert.deepStrictEqual(saved[0], book2);
+          assert.deepStrictEqual(saved[1], book1);
+        });
+
+        describe('pagination', () => {
+          it('returns a Paginated object if $limit query param is set', async () => {
+            const options = { title: 'test' };
+            const options2 = { title: 'test' };
+            const options3 = { title: 'test' };
+            const book1 = await service.create(options);
+            const book2 = await service.create(options2);
+            await service.create(options3);
+            const result = await service.find({ query: { title: 'test', $limit: 2 } }) as Paginated<Book>;
+
+            assert.strictEqual(result.total, 3);
+            assert.strictEqual(result.limit, 2);
+            assert.strictEqual(result.skip, 0);
+            assert.strictEqual(result.data.length, 2);
+            assert.deepStrictEqual(result.data.sort(), [book1, book2].sort());
           });
 
-          const book = await paginatedService.create(options);
-          await paginatedService.create(options2);
-          await paginatedService.create(options3);
-          const result = await paginatedService.find({ query: { title: 'test' } }) as Paginated<Book>;
+          it('offsets results by $skip query param', async () => {
+            const options = { title: 'test' };
+            const options2 = { title: 'test' };
+            const options3 = { title: 'test' };
+            const book1 = await service.create(options);
+            const book2 = await service.create(options2);
+            const book3 = await service.create(options3);
+            const result = await service.find({ query: { title: 'test', $limit: 2, $skip: 1 } }) as Paginated<Book>;
 
-          expect(result.total).toEqual(3);
-          expect(result.limit).toEqual(1);
-          expect(result.skip).toEqual(0);
-          expect(result.data.length).toEqual(1);
-          expect(result.data).toContainEqual(book);
-        });
-
-        it('honors max limit set at service initialization', async () => {
-          const options = { title: 'test' };
-          const options2 = { title: 'test' };
-          const options3 = { title: 'test' };
-
-          const paginatedService = createService({
-            orm: app.get('orm'),
-            Entity: Book,
-            paginate: { default: 1, max: 2 }
+            assert.strictEqual(result.total, 3);
+            assert.strictEqual(result.limit, 2);
+            assert.strictEqual(result.skip, 1);
+            assert.strictEqual(result.data.length, 2);
+            assert.deepStrictEqual(result.data.sort(), [book2, book3].sort());
           });
 
-          const book1 = await paginatedService.create(options);
-          const book2 = await paginatedService.create(options2);
-          await paginatedService.create(options3);
+          it('uses default limit set at service initialization if no $limit query param is set', async () => {
+            const options = { title: 'test' };
+            const options2 = { title: 'test' };
+            const options3 = { title: 'test' };
 
-          // test with a limit set in params
-          const resultWithLimit = await paginatedService.find({ query: { title: 'test', $limit: 3 } }) as Paginated<Book>;
+            const paginatedService = createService({
+              orm: app.get('orm'),
+              Entity: Book,
+              paginate: { default: 1 }
+            });
 
-          expect(resultWithLimit.total).toEqual(3);
-          expect(resultWithLimit.limit).toEqual(2);
-          expect(resultWithLimit.skip).toEqual(0);
-          expect(resultWithLimit.data.length).toEqual(2);
-          expect(resultWithLimit.data).toContainEqual(book1);
-          expect(resultWithLimit.data).toContainEqual(book2);
+            const book = await paginatedService.create(options);
+            await paginatedService.create(options2);
+            await paginatedService.create(options3);
+            const result = await paginatedService.find({ query: { title: 'test' } }) as Paginated<Book>;
 
-          // test without a limit set in params
-          const resultWithoutLimit = await paginatedService.find({ query: { title: 'test' } }) as Paginated<Book>;
+            assert.strictEqual(result.total, 3);
+            assert.strictEqual(result.limit, 1);
+            assert.strictEqual(result.skip, 0);
+            assert.strictEqual(result.data.length, 1);
+            assert.deepStrictEqual(result.data.sort(), [book].sort());
+          });
 
-          expect(resultWithoutLimit.total).toEqual(3);
-          expect(resultWithoutLimit.limit).toEqual(2);
-          expect(resultWithoutLimit.skip).toEqual(0);
-          expect(resultWithoutLimit.data.length).toEqual(2);
-          expect(resultWithoutLimit.data).toContainEqual(book1);
-          expect(resultWithoutLimit.data).toContainEqual(book2);
+          it('honors max limit set at service initialization', async () => {
+            const options = { title: 'test' };
+            const options2 = { title: 'test' };
+            const options3 = { title: 'test' };
+
+            const paginatedService = createService({
+              orm: app.get('orm'),
+              Entity: Book,
+              paginate: { default: 1, max: 2 }
+            });
+
+            const book1 = await paginatedService.create(options);
+            const book2 = await paginatedService.create(options2);
+            await paginatedService.create(options3);
+
+            // test with a limit set in params
+            const resultWithLimit = await paginatedService.find({ query: { title: 'test', $limit: 3 } }) as Paginated<Book>;
+
+            assert.strictEqual(resultWithLimit.total, 3);
+            assert.strictEqual(resultWithLimit.limit, 2);
+            assert.strictEqual(resultWithLimit.skip, 0);
+            assert.strictEqual(resultWithLimit.data.length, 2);
+            assert.deepStrictEqual(resultWithLimit.data.sort(), [book1, book2].sort());
+
+            // test without a limit set in params
+            const resultWithoutLimit = await paginatedService.find({ query: { title: 'test' } }) as Paginated<Book>;
+
+            assert.strictEqual(resultWithoutLimit.total, 3);
+            assert.strictEqual(resultWithoutLimit.limit, 2);
+            assert.strictEqual(resultWithoutLimit.skip, 0);
+            assert.strictEqual(resultWithoutLimit.data.length, 2);
+            assert.deepStrictEqual(resultWithoutLimit.data.sort(), [book1, book2].sort());
+          });
         });
       });
-    });
 
-    describe('patch', () => {
-      it('updates a saved book by id', async () => {
-        const options = { title: 'test' };
-        const initial = await service.create(options);
-        const patched = await service.patch(initial.uuid, { title: 'updated' });
-        expect(patched.title).toEqual('updated');
+      describe('patch', () => {
+        it('updates a saved book by id', async () => {
+          const options = { title: 'test' };
+          const initial = await service.create(options);
+          const patched = await service.patch(initial.uuid, { title: 'updated' });
+          assert.strictEqual(patched.title, 'updated');
 
-        const saved = await service.get(initial.uuid);
-        expect(saved).toEqual(patched);
+          const saved = await service.get(initial.uuid);
+          assert.deepStrictEqual(saved, patched);
+        });
+
+        it('updates multiple books by query params', async () => {
+          const options1 = { title: 'test', version: '1', popularity: 1 };
+          const options2 = { title: 'test', version: '2', popularity: 1 };
+          const book1 = await service.create(options1);
+          const book2 = await service.create(options2);
+
+          const patched = await service.patch(null, { popularity: 10 }, { title: 'test' });
+
+          assert.strictEqual(patched.length, 2);
+          assert.strictEqual(patched[0].popularity, 10);
+          assert.strictEqual(patched[1].popularity, 10);
+
+          const saved1 = await service.get(book1.uuid);
+          assert.deepStrictEqual(saved1, patched[0]);
+          const saved2 = await service.get(book2.uuid);
+          assert.deepStrictEqual(saved2, patched[1]);
+        });
       });
 
-      it('updates multiple books by query params', async () => {
-        const options1 = { title: 'test', version: '1', popularity: 1 };
-        const options2 = { title: 'test', version: '2', popularity: 1 };
-        const book1 = await service.create(options1);
-        const book2 = await service.create(options2);
+      describe('remove', () => {
+        it('deletes a saved book by id', async () => {
+          const options = { title: 'test' };
+          const initial = await service.create(options);
 
-        const patched = await service.patch(null, { popularity: 10 }, { title: 'test' });
+          await service.remove(initial.uuid);
 
-        expect(patched.length).toEqual(2);
-        expect(patched[0].popularity).toEqual(10);
-        expect(patched[1].popularity).toEqual(10);
+          let called = false;
 
-        const saved1 = await service.get(book1.uuid);
-        expect(saved1).toEqual(patched[0]);
-        const saved2 = await service.get(book2.uuid);
-        expect(saved2).toEqual(patched[1]);
-      });
-    });
+          try {
+            await service.get(initial.uuid);
+            assert.fail();
+          } catch (e: any) {
+            assert.deepStrictEqual(e.message, 'Book not found.');
+            called = true;
+          }
 
-    describe('remove', () => {
-      it('deletes a saved book by id', async () => {
-        const options = { title: 'test' };
-        const initial = await service.create(options);
+          assert.ok(called);
+        });
 
-        await service.remove(initial.uuid);
+        it('ignores params when deleting by id', async () => {
+          const options = { title: 'test' };
+          const params = { query: {} };
+          const savedBook = await service.create(options);
 
-        try {
-          await service.get(initial.uuid);
-          fail();
-        } catch (e) {
-          expect(e).toEqual(new NotFound('Book not found.'));
-        }
-      });
+          await service.remove(savedBook.uuid, params);
 
-      it('ignores params when deleting by id', async () => {
-        const options = { title: 'test' };
-        const params = { query: {} };
-        const savedBook = await service.create(options);
+          let called = false;
 
-        await service.remove(savedBook.uuid, params);
+          try {
+            await service.get(savedBook.uuid);
+            assert.fail();
+          } catch (e: any) {
+            assert.deepStrictEqual(e.message, 'Book not found.');
+            called = true;
+          }
 
-        try {
-          await service.get(savedBook.uuid);
-          fail();
-        } catch (e) {
-          expect(e).toEqual(new NotFound('Book not found.'));
-        }
-      });
+          assert.ok(called);
+        });
 
-      it('returns the deleted book', async () => {
-        const options = { title: 'test' };
-        const initial = await service.create(options);
+        it('returns the deleted book', async () => {
+          const options = { title: 'test' };
+          const initial = await service.create(options);
 
-        const removed = await service.remove(initial.uuid);
-        expect(removed).toEqual(initial);
-      });
+          const removed = await service.remove(initial.uuid);
+          assert.deepStrictEqual(removed, initial);
+        });
 
-      it('deletes many books by params', async () => {
-        const options1 = { title: 'test' };
-        const options2 = { title: 'test' };
-        await service.create(options1);
-        await service.create(options2);
+        it('deletes many books by params', async () => {
+          const options1 = { title: 'test' };
+          const options2 = { title: 'test' };
+          await service.create(options1);
+          await service.create(options2);
 
-        const response = await service.remove(null, { where: { title: 'test' } });
-        expect(response).toEqual({ success: true });
+          const response = await service.remove(null, { where: { title: 'test' } });
+          assert.deepStrictEqual(response, { success: true });
 
-        // check that all of the books have been removed
-        const found = await service.find() as Book[];
-        expect(found.length).toEqual(0);
+          // check that all of the books have been removed
+          const found = await service.find() as Book[];
+          assert.strictEqual(found.length, 0);
+        });
       });
     });
   });
