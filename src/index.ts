@@ -1,10 +1,11 @@
-import { AdapterService, ServiceOptions } from '@feathersjs/adapter-commons';
+import { AdapterService, ServiceOptions, select } from '@feathersjs/adapter-commons';
 import { Id, NullableId, Paginated, PaginationOptions, Params } from '@feathersjs/feathers';
-import { EntityRepository, MikroORM, wrap, Utils, FilterQuery, FindOptions } from '@mikro-orm/core';
+import { EntityRepository, MikroORM, wrap, Utils, FilterQuery, FindOptions, FindOneOptions } from '@mikro-orm/core';
 import { NotFound } from '@feathersjs/errors';
 import _isEmpty from 'lodash/isEmpty';
 import _omit from 'lodash/omit';
 import _pick from 'lodash/pick';
+import { ParamsPaginateFalse } from './types';
 
 interface MikroOrmServiceOptions<T = any> extends Partial<ServiceOptions> {
   Entity: new (...args: any[]) => T; // constructor for instances of T
@@ -43,9 +44,29 @@ export class Service<T = any> extends AdapterService {
   }
 
   async _get (id: Id, params?: Params): Promise<T> {
-    const where = params?.where || params?.query?.where;
+    const { query: where } = this.filterQuery(params);
 
-    const entity = await this._getEntityRepository().findOne(id || where, params?.populate);
+    let q: FilterQuery<T>;
+
+    if (!params?.query) {
+      q = id as FilterQuery<T>;
+    } else {
+      q = Object.assign({}, where, {
+        $and: where.$and ? [...where.$and, { [this.id]: id }] : [{ [this.id]: id }]
+      });
+    }
+
+    const options: FindOneOptions<T> = {};
+    if (params?.populate) { options.populate = params.populate; }
+    if (params?.query?.$select) { options.fields = params.query.$select; }
+
+    let entity;
+
+    try {
+      entity = await this._getEntityRepository().findOne(q, options);
+    } catch (err) {
+      throw new NotFound(`${this.name} not found`);
+    }
 
     if (!entity) {
       throw new NotFound(`${this.name} not found.`);
@@ -54,10 +75,13 @@ export class Service<T = any> extends AdapterService {
     return entity;
   }
 
+  async _find (params?: ParamsPaginateFalse): Promise<T[]>
   async _find (params?: Params): Promise<T[] | Paginated<T>> {
     if (!params) {
-      return this._getEntityRepository().findAll(params);
+      return await this._getEntityRepository().findAll(params);
     }
+
+    const { paginate }: any = this.filterQuery(params);
 
     // mikro-orm filter query is query params minus special feathers query params
     const query: FilterQuery<T> = _omit(params.query, feathersSpecialQueryParameters) as FilterQuery<T>;
@@ -97,7 +121,7 @@ export class Service<T = any> extends AdapterService {
     }
 
     // if limit is set, run a findAndCount query and return a Paginated object
-    if (limit) {
+    if (paginate && paginate.default) {
       return await this._findPaginated(query, options);
     } else {
       // if no limit is set, run a regular find query and return the results
@@ -107,11 +131,16 @@ export class Service<T = any> extends AdapterService {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  async _create (data: Partial<T>, _params?: Params): Promise<T> {
-    const entity = new this.Entity(data);
+  async _create (data: Partial<T>, _params?: Params): Promise<T>
+  async _create (data: Partial<T>[], _params?: Params): Promise<T[]>
+  async _create (data: Partial<T> | Partial<T>[], _params?: Params): Promise<T | T[]> {
+    const entityOrEntities = Array.isArray(data) ? data.map(x => new this.Entity(x)) : new this.Entity(data);
 
-    await this._getEntityRepository().persistAndFlush(entity);
-    return entity;
+    const entityRepository = this._getEntityRepository();
+
+    await entityRepository.persistAndFlush(entityOrEntities);
+
+    return entityOrEntities;
   }
 
   async _patch (id: NullableId, data: Partial<T>, params?: Params): Promise<T | T[]> {
@@ -119,14 +148,11 @@ export class Service<T = any> extends AdapterService {
     const entityRepository = this._getEntityRepository();
 
     if (id) {
-      const entity = await entityRepository.findOne(where, params?.populate);
-      if (!entity) {
-        throw new NotFound(`cannot patch ${this.name}, entity not found`);
-      }
+      const entity = await this._get(id, params);
 
       wrap(entity).assign(data as any);
       await entityRepository.persistAndFlush(entity);
-      return entity;
+      return select(params, this.id)(entity);
     }
 
     /**
@@ -155,17 +181,27 @@ export class Service<T = any> extends AdapterService {
     return entities;
   }
 
-  async _remove (id: NullableId, params?: Params): Promise<T | { success: boolean }> {
-    if (id) {
+  async _update (id: Id, data: Partial<T>, params?: Params): Promise<T> {
+    const entity = await this._get(id, params);
+
+    const entityRepository = this._getEntityRepository();
+
+    wrap(entity).assign(data as any);
+    await entityRepository.persistAndFlush(entity);
+
+    return select(params, this.id)(entity);
+  }
+
+  async _remove (id: Id, params?: Params): Promise<T>
+  async _remove (id: null, params?: Params): Promise<T[]>
+  async _remove (id: NullableId, params?: Params): Promise<T | T[]> {
+    if (id !== null) {
       // removing a single entity by id
 
       let entity: T;
 
       try {
-        // repository methods often complain about argument types being incorrect even when they're not
-        // `string` and `number` types _should_ be assignable to `FilterQuery`, but they aren't.
-        // comment by package author/maintainer: https://github.com/mikro-orm/mikro-orm/issues/1405#issuecomment-775841265
-        entity = await this._getEntityRepository().findOneOrFail(id as FilterQuery<T>);
+        entity = await this._get(id, params);
       } catch (e) {
         throw new NotFound(`${this.name} not found.`);
       }
@@ -173,17 +209,17 @@ export class Service<T = any> extends AdapterService {
       // await this.repository.removeAndFlush(entity);
       await this._getEntityRepository().removeAndFlush(entity);
       return entity;
-    } else if (params?.query || params?.where) {
-      const query = params?.query || params?.where;
+    } else {
+      const entries = await this._find(Object.assign({}, params, { paginate: false }) as ParamsPaginateFalse);
+      // @ts-ignore
+      const queryDelete: FilterQuery<T> = { [this.id]: { $in: entries.map(e => e[this.id]) } } as FilterQuery<T>;
       // removing many entities by a query
       const entityRepo = this._getEntityRepository();
-      const deletedCount = await entityRepo.nativeDelete(query);
-      await entityRepo.flush();
+      await entityRepo.nativeDelete(queryDelete);
+      // await entityRepo.flush();
 
-      return deletedCount > 0 ? { success: true } : { success: false };
+      return entries;
     }
-
-    return { success: false };
   }
 
   /**
@@ -198,11 +234,11 @@ export class Service<T = any> extends AdapterService {
   }
 
   /**
- * helper to get a total count of entities matching a query
- * @param query the query to match by
- * @param skip the $skip value from query params. kind of nonsensical and will not be used in the actual query, but is required in the return type. default 0.
- * @returns Promise<Paginated<never>> a feathers Paginated object with the total count
- */
+   * helper to get a total count of entities matching a query
+   * @param query the query to match by
+   * @param skip the $skip value from query params. kind of nonsensical and will not be used in the actual query, but is required in the return type. default 0.
+   * @returns Promise<Paginated<never>> a feathers Paginated object with the total count
+   */
   private async _findCount (query: FilterQuery<T>, skip = 0): Promise<Paginated<never>> {
     const total = await this._getEntityRepository().count(query);
 

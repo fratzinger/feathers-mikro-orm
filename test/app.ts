@@ -31,7 +31,8 @@ export async function setupApp (app?: Application): Promise<Application> {
 
   const bookService = new Service({
     Entity: Book,
-    orm
+    orm,
+    multi: true
   });
 
   app.use('/books', bookService);
